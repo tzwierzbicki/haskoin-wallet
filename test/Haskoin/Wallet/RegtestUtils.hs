@@ -1126,7 +1126,7 @@ pendingOf home = do
 -- result of each portfolio there
 onChain :: Chain -> (SyncRes -> a) -> Response -> IO [a]
 onChain chain reading = \case
-  ResponseSync results _ _ _ -> return [reading result | result <- results, (placeNetwork (syncResPlace result)).name == networkOf chain]
+  ResponseSync results _ _ _ _ -> return [reading result | result <- results, (placeNetwork (syncResPlace result)).name == networkOf chain]
   other -> fail ("Not the answer of a sync: " <> show other)
 
 -- | The pending transactions that a sync sent again on a chain and that
@@ -1154,7 +1154,7 @@ tokenCoinsOn chain answered = concat <$> onChain chain syncResTokenCoins answere
 -- | The failure of the store of a chain that a sync left out, if any
 notSyncedOn :: Chain -> Response -> IO (Maybe Text)
 notSyncedOn chain = \case
-  ResponseSync _ _ notSynced _ -> return (lookup (networkOf chain) [(net.name, failure) | (net, failure) <- notSynced])
+  ResponseSync _ _ notSynced _ _ -> return (lookup (networkOf chain) [(net.name, failure) | (net, failure) <- notSynced])
   other -> fail ("Not the answer of a sync: " <> show other)
 
 -- | The message of a command that failed

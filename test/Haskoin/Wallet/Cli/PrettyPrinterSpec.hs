@@ -31,7 +31,7 @@ import Haskoin.Wallet.Database.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), ChangeFollowed (..), ChangeStop (..), Group (..), NewSecret (..), Response (..), TxEdit (..))
 import Haskoin.Wallet.Cli.Style (errorDoc, renderPlain)
 import Haskoin.Wallet.Config.View (View (..))
-import Haskoin.Wallet.Contacts (Contact (..))
+import Haskoin.Wallet.Contacts (Contact (..), Holder (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (CoinTotals (..), NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (AddressFunds (..), CoinBalance (..))
@@ -41,7 +41,7 @@ import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Pla
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..), TagWidths (..))
 import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), plainTag)
-import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PoolPath (..), legacyPath)
 import Haskoin.Wallet.Database.File (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.WalletFile (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), wholeFile)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncAfter (..), SyncMode (..), SyncRes (..), nothingToSyncAfter)
@@ -1314,7 +1314,7 @@ addressSpec =
     -- last are those of --verbose, whose time is on the clock of the
     -- computer.
     it "ends the address an answer gives with its account: its portfolio, its network and its type" $ do
-      shown <- addressAnswerDoc WithWallets WithoutCode (DefaultUnit UnitBitcoin) (Just otherRef) (AccountRef (Place otherRef btc) Bip84) segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithWallets WithoutCode (DefaultUnit UnitBitcoin) (Just otherRef) (AccountRef (Place otherRef btc) Bip84) segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing Nothing
       last (renderedLines shown) `shouldBe` "  Account     : portfolio1 of wallet2  btc  bip84"
 
     -- tag was given the address /0/0, whose coin a payment spent: 27740
@@ -1322,7 +1322,7 @@ addressSpec =
     -- after the fields of the address, of which the account is the last.
     it "lists the change addresses that took the tags of tag with the address, after an empty line" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
-      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [(changeRow, Holds (CoinTotals 27740 27740), [plainTag kycTag])] []))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] Nothing (Just (ChangeFollowed AddTags [(changeRow, Holds (CoinTotals 27740 27740), [plainTag kycTag])] []))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "Tagged with it, down the chain of its payments: 1 change address",
@@ -1337,7 +1337,7 @@ addressSpec =
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
           sourceRow = paidAddressRow {dBAddressIndex = 1, dBAddressAddress = "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", dBAddressLabel = ""}
           stop = ChangeStop (changeRow, Holds (CoinTotals 27740 27740), []) [plainTag kycTag] (fakeTxHash 7) (Just (sourceRow, Holds (CoinTotals 0 0), []))
-      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] Nothing (Just (ChangeFollowed AddTags [] [stop]))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "No change address down the chain of its payments was tagged with it",
@@ -1353,13 +1353,13 @@ addressSpec =
     it "says of a stop whose other coin is not of the portfolio that the coin has no tag" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
           stop = ChangeStop (changeRow, Holds (CoinTotals 27740 27740), []) [plainTag coldTag, plainTag kycTag] (fakeTxHash 7) Nothing
-      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] Nothing (Just (ChangeFollowed AddTags [] [stop]))
       last (renderedLines shown) `shouldBe` "  The payment 00000000 also spends a coin that is not of the portfolio, and has no tag"
 
     -- The same address after untag: the change address has no tag left
     it "says the change addresses lost the tags of untag with the address" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
-      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [] (Just (ChangeFollowed RemoveTags [(changeRow, Holds (CoinTotals 27740 27740), [])] []))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [] Nothing (Just (ChangeFollowed RemoveTags [(changeRow, Holds (CoinTotals 27740 27740), [])] []))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "Untagged with it, down the chain of its payments: 1 change address",
@@ -1369,7 +1369,7 @@ addressSpec =
 
     -- show finds an address of portfolio0 while portfolio1 is active
     it "says the account of the address is not of the active portfolio, and names the active one, when another one is active" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just (PortfolioRef 0 1)) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just (PortfolioRef 0 1)) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing Nothing
       last (renderedLines shown) `shouldBe` "  Account     : portfolio0, not the active portfolio1  btc  bip84"
 
     -- The address /0/3 of the bip44 account, which the wallet has not
@@ -1888,7 +1888,7 @@ syncSpec =
                    ]
 
     it "answers with the syncs, then the networks not served, then those down, a blank line between them" $
-      printedLines (ResponseSync [quietSync, quietOn mainPortfolioRef bch] [btcTest4] [(bchTest4, downStore)] (Just mainPortfolioRef))
+      printedLines (ResponseSync [quietSync, quietOn mainPortfolioRef bch] [btcTest4] [(bchTest4, downStore)] [] (Just mainPortfolioRef))
         `shouldReturn` [ "portfolio0  btc",
                          "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                          "  synced at block 800002, nothing new",
@@ -3675,7 +3675,7 @@ nextStepsSpec = do
 
   describe "The next steps after a sync" $ do
     -- portfolio0 of wallet0 is the active portfolio
-    let synced results = renderedLines <$> nextStepsPrinter (CommandSync Nothing Incremental) (ResponseSync results [] [] (Just mainPortfolioRef))
+    let synced results = renderedLines <$> nextStepsPrinter (CommandSync Nothing Incremental) (ResponseSync results [] [] [] (Just mainPortfolioRef))
         holdingIn ref = quietSync {syncResPlace = Place ref btc}
         conflictIn ref net = quietSync {syncResPlace = Place ref net, syncResConflicted = 1}
         updatedIn ref = quietSync {syncResPlace = Place ref btc, syncResTxUpdates = 2}
@@ -4066,17 +4066,17 @@ otherPortfolioSpec = do
   -- segwitAddressRow is bip84/0/1 of portfolio0
   describe "An address of another portfolio than the active one, as show and label answer with it" $ do
     it "names its portfolio after its path" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just portfolio1Ref) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just portfolio1Ref) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1 of portfolio0  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
     it "gives its path alone when its portfolio is the active one" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
     -- The address is of portfolio0 of wallet0, while portfolio1 of
     -- wallet2 is active
     it "names the wallet after the portfolio of its path in a database of several wallets, wallet0 too" $ do
-      shown <- addressAnswerDoc WithWallets WithoutCode (DefaultUnit UnitBitcoin) (Just otherRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithWallets WithoutCode (DefaultUnit UnitBitcoin) (Just otherRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1 of portfolio0 of wallet0  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
 {- The address book -}
@@ -4333,26 +4333,26 @@ addressBookSpec = do
         onCash = Contact "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a" "" [] seenTime
 
     it "takes two lines in the compact view: its address with its label and its tags, then its address in fours" $
-      renderedLines (compactContactDoc alice)
+      renderedLines (compactContactDoc alice Nothing)
         `shouldBe` [ "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  \"Alice\"  [kyc]",
                      "  bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4"
                    ]
 
     it "shows its address alone on its first line when it has neither a label nor a tag" $
-      renderedLines (compactContactDoc onCash)
+      renderedLines (compactContactDoc onCash Nothing)
         `shouldBe` [ "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a",
                      "  bitcoincash: qpm2 qszn hks2 3z76 29mm s6s4 cwef 74vc wvy2 2gdx 6a"
                    ]
 
     it "adds when it was added in the verbose view of the listing, which names no network" $
-      renderedLines (verboseContactDoc Nothing seenTimeInCet alice)
+      renderedLines (verboseContactDoc Nothing seenTimeInCet alice Nothing)
         `shouldBe` [ "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  \"Alice\"  [kyc]",
                      "  In fours: bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4",
                      "  Added   : 14 Nov 2023 23:13:20 CET"
                    ]
 
     it "names its network in an answer about it alone" $
-      renderedLines (verboseContactDoc (Just bch) seenTimeInCet onCash)
+      renderedLines (verboseContactDoc (Just bch) seenTimeInCet onCash Nothing)
         `shouldBe` [ "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a",
                      "  In fours: bitcoincash: qpm2 qszn hks2 3z76 29mm s6s4 cwef 74vc wvy2 2gdx 6a",
                      "  Network : bch",
@@ -4364,7 +4364,7 @@ addressBookSpec = do
     it "takes one row of the table, under its address, its address in fours, its tags and its label" $ do
       let contacts = [alice, landlordContact]
           headed = contactTableColumns 12 contacts
-      concatMap renderedLines (tableHeader headed <> (contactRowDoc headed <$> contacts))
+      concatMap renderedLines (tableHeader headed <> [contactRowDoc WithoutWallets headed (contact, Nothing) | contact <- contacts])
         `shouldBe` [ "Address                                    │ In fours                                             │ Tags         │ Label",
                      "───────────────────────────────────────────┼──────────────────────────────────────────────────────┼──────────────┼──────",
                      "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 │ bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4 │ kyc          │ \"Alice\"",
@@ -4376,6 +4376,87 @@ addressBookSpec = do
         `shouldBe` [ "Deleted from the address book",
                      "  bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  \"Alice\"  [kyc]"
                    ]
+
+  -- The wallet came to hold the address of Alice, at bip84/0/3 of
+  -- portfolio0: the contact is still in the address book
+  describe "A contact whose address the wallet holds" $ do
+    let alice = Contact "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4" "Alice" [plainTag kycTag] seenTime
+        untagged = alice {contactTags = []}
+        nameless = Contact "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4" "" [] seenTime
+        holder = Holder mainPortfolioRef (PoolPath Bip84 (Deriv :/ 0 :/ 3))
+        answering contactM = addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] contactM Nothing
+        syncedHolding held = drop 4 <$> printedLines (ResponseSync [quietSync] [] [] held (Just mainPortfolioRef))
+
+    it "has a third line in the compact view: the path of the address with its portfolio, and to delete the contact" $
+      (renderedLines <$> listedContactDoc WithoutWallets Compact (alice, Just holder))
+        `shouldReturn` [ "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  \"Alice\"  [kyc]",
+                         "  bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4",
+                         "  now bip84/0/3 of portfolio0: delete the contact"
+                       ]
+
+    it "names the wallet of that portfolio in a database of several wallets" $
+      (drop 2 . renderedLines <$> listedContactDoc WithWallets Compact (alice, Just (Holder otherRef (PoolPath Bip84 (Deriv :/ 0 :/ 3)))))
+        `shouldReturn` ["  now bip84/0/3 of portfolio1 of wallet2: delete the contact"]
+
+    it "has a field that says so in the verbose view, below its address in fours" $
+      (take 3 . renderedLines <$> listedContactDoc WithoutWallets Verbose (alice, Just holder))
+        `shouldReturn` [ "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  \"Alice\"  [kyc]",
+                         "  In fours: bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4",
+                         "  Now     : bip84/0/3 of portfolio0: delete the contact"
+                       ]
+
+    it "says so after its label in its row of the table, after a comma" $ do
+      let headed = contactTableColumns 12 [alice]
+      renderedLines (contactRowDoc WithoutWallets headed (alice, Just holder))
+        `shouldBe` ["bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 │ bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4 │ kyc          │ \"Alice\", now bip84/0/3 of portfolio0: delete the contact"]
+
+    it "says so alone in the last cell of its row when it has no label" $ do
+      let headed = contactTableColumns 12 [nameless]
+      renderedLines (contactRowDoc WithoutWallets headed (nameless, Just holder))
+        `shouldBe` ["bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 │ bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4 │              │ now bip84/0/3 of portfolio0: delete the contact"]
+
+    it "is named in the last field of the answer of that address, with its label and its tags, and to delete it" $ do
+      shown <- answering (Just alice)
+      last (renderedLines shown) `shouldBe` "  Address book: also a contact, \"Alice\" [kyc]: delete the contact"
+
+    it "is named in that field without a label or a tag when it has none" $ do
+      shown <- answering (Just nameless)
+      last (renderedLines shown) `shouldBe` "  Address book: also a contact: delete the contact"
+
+    it "adds no field to the answer of an address that is in no address book" $ do
+      shown <- answering Nothing
+      last (renderedLines shown) `shouldBe` "  Account     : portfolio0  btc  bip84"
+
+    -- The four lines before are the sync of portfolio0 on btc and a
+    -- blank line. The contact has a tag, so the last sentence says that
+    -- the tag still counts.
+    it "is listed after the syncs of sync, with its address of the wallet, and a sentence on its tags" $
+      syncedHolding [(btc, [(alice, holder)])]
+        `shouldReturn` [ "The wallet now holds the address of a contact of the address book:",
+                         "  bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  \"Alice\"  [kyc]",
+                         "    now bip84/0/3 of portfolio0: delete the contact",
+                         "Its tags still count in tags, and in txs --address-tag and txs --untagged, until",
+                         "you delete the contact."
+                       ]
+
+    it "is listed by sync without the sentence on its tags when it has no tag" $
+      syncedHolding [(btc, [(untagged, holder)])]
+        `shouldReturn` [ "The wallet now holds the address of a contact of the address book:",
+                         "  bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  \"Alice\"",
+                         "    now bip84/0/3 of portfolio0: delete the contact"
+                       ]
+
+    -- The landlord is a contact of bch too, held at bip44/0/0
+    it "is counted with the others by sync, each under the name of its network when they are on several" $
+      syncedHolding [(btc, [(untagged, holder)]), (bch, [(landlordContact, Holder mainPortfolioRef (PoolPath Bip44 (Deriv :/ 0 :/ 0)))])]
+        `shouldReturn` [ "The wallet now holds the addresses of 2 contacts of the address book:",
+                         "  btc",
+                         "  bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  \"Alice\"",
+                         "    now bip84/0/3 of portfolio0: delete the contact",
+                         "  bch",
+                         "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\"",
+                         "    now bip44/0/0 of portfolio0: delete the contact"
+                       ]
 
   describe "The listing of the address book" $ do
     it "says how to add a contact when it has none to show" $

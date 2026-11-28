@@ -43,6 +43,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.BestBlock (poolEverSynced)
 import Haskoin.Wallet.Database.ChangeChain (ChainRetagged (..), ChainStop (..))
 import Haskoin.Wallet.Database.Coin
+import Haskoin.Wallet.Database.Contact (contactAt)
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.Tag
@@ -90,6 +91,12 @@ fundsAt everSynced totals addr
 -- | The answer showing an address of the account, with what hw knows of
 -- its funds (@addressShown@) and its tags. The account may be of another portfolio than the active one:
 -- show and label find the address in every portfolio.
+--
+-- The answer also gives the contact of the address book at this address,
+-- if there is one: a contact whose address the wallet came to hold
+-- ("Haskoin.Wallet.Contacts"). Every command that answers with an address
+-- of the wallet then tells the user, receive at the moment it gives such
+-- an address out.
 addressAnswer :: DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
 addressAnswer = retaggedAnswer AddTags Nothing
 
@@ -104,9 +111,12 @@ retaggedAnswer retag followedM accId addr = do
   acc <- getAccountById accId
   ref <- accountRefOf acc
   (_, funds, tags) <- addressShown addr
+  -- The address book keeps a contact by the text the wallet keeps its
+  -- own address by, on the same network
+  contactM <- lift $ contactAt (accountNetwork acc) (dBAddressAddress addr)
   changeM <- forM followedM $ \followed ->
     ChangeFollowed retag <$> mapM addressShown followed.chainChanged <*> mapM stopShown followed.chainStops
-  ResponseAddress ref addr funds tags changeM <$> activePortfolioRef
+  ResponseAddress ref addr funds tags contactM changeM <$> activePortfolioRef
   where
     stopShown :: ChainStop -> ExceptT String (DB IO) ChangeStop
     stopShown stop =

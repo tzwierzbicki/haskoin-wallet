@@ -28,11 +28,12 @@ import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Config
-import Haskoin.Wallet.Contacts (Contact (..))
+import Haskoin.Wallet.Contacts (Contact (..), Holder (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.Tag
+import Haskoin.Wallet.Keys (poolPathText)
 import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Tags (ShownTag (..), tagText)
 import Haskoin.Wallet.Tx.SignData
@@ -153,13 +154,27 @@ deleteTagNotice use =
 
 -- | What deletecontact says before its question: the contact that goes,
 -- with its label when it has one, that its tags stay in the database,
--- and what becomes of the transactions that paid it
-deleteContactNotice :: Contact -> [String]
-deleteContactNotice contact =
+-- and what becomes of the transactions at its address.
+--
+-- For a contact whose address a wallet of the database holds, given
+-- where, the last sentence says so: the transactions show the address by
+-- its path, with the contact or without it, and not as the address of a
+-- stranger. The portfolio is named with its wallet, as a sentence names
+-- one.
+deleteContactNotice :: Contact -> Maybe Holder -> [String]
+deleteContactNotice contact holderM =
   ["The contact " <> cs (contactAddress contact) <> label <> " will be deleted from the address book."]
     <> ["Its tags come off it, and the tags themselves stay." | not (null (contactTags contact))]
-    <> ["The transactions that paid the address stay in the history, and show it as the address of a stranger."]
+    <> [after]
   where
+    after = case holderM of
+      Nothing -> "The transactions that paid the address stay in the history, and show it as the address of a stranger."
+      Just holder ->
+        "The wallet holds its address, at "
+          <> cs (poolPathText (holderPath holder))
+          <> " of "
+          <> cs (portfolioRefName WithWallets (holderPortfolio holder))
+          <> ": the transactions show it by that path already."
     label
       | Text.null (contactLabel contact) = ""
       | otherwise = " " <> quoted (contactLabel contact)

@@ -198,12 +198,12 @@ sectionsPrinter choice view naming tagsWide titled = \case
   -- table fit the widest cell of its section
   ResponseContacts groups ->
     sections noContacts groups $ \none (net, contacts) -> do
-      let headed = contactTableColumns tagsWide.contactTagsWidth contacts
+      let headed = contactTableColumns tagsWide.contactTagsWidth (fst <$> contacts)
           title = [text net.name | titled]
       if view == Table
-        then return $ Rows none title (tableHeader headed) (contactRowDoc headed <$> contacts) False
+        then return $ Rows none title (tableHeader headed) (contactRowDoc naming headed <$> contacts) False
         else do
-          docs <- mapM (listedContactDoc view) contacts
+          docs <- mapM (listedContactDoc naming view) contacts
           return $ Rows none title [] docs True
   _ -> return Nothing
   where

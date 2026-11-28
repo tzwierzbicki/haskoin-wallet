@@ -634,7 +634,7 @@ networksShownOf response = do
 -- portfolio without an account on the network is left out.
 spendableOn :: Network -> Response -> Either String [(PortfolioRef, Word64)]
 spendableOn net = \case
-  ResponseSync results _ _ _ -> Right (fromSyncs results)
+  ResponseSync results _ _ _ _ -> Right (fromSyncs results)
   ResponseRecover _ _ _ _ results _ _ _ _ _ _ -> Right (fromSyncs results)
   other -> do
     views <- portfolioViewsOf other
@@ -695,7 +695,7 @@ checkedMasterKeyOf other = Left (show other)
 -- network, with what it can spend now
 syncedOf :: Response -> Either String [(Place, Word64)]
 syncedOf = \case
-  ResponseSync results _ _ _ -> Right (fromSyncs results)
+  ResponseSync results _ _ _ _ -> Right (fromSyncs results)
   ResponseRecover _ _ _ _ results _ _ _ _ _ _ -> Right (fromSyncs results)
   other -> Left (show other)
   where
@@ -704,26 +704,26 @@ syncedOf = \case
 -- | The networks the host does not serve, as sync and recover name them
 notServedOf :: Response -> Either String [String]
 notServedOf = \case
-  ResponseSync _ unserved _ _ -> Right ((.name) <$> unserved)
+  ResponseSync _ unserved _ _ _ -> Right ((.name) <$> unserved)
   ResponseRecover _ _ _ _ _ _ unserved _ _ _ _ -> Right ((.name) <$> unserved)
   other -> Left (show other)
 
 -- | The networks a sync left out, each with the failure of its store
 notSyncedOf :: Response -> Either String [(String, Text)]
-notSyncedOf (ResponseSync _ _ notSynced _) = Right [(net.name, failure) | (net, failure) <- notSynced]
+notSyncedOf (ResponseSync _ _ notSynced _ _) = Right [(net.name, failure) | (net, failure) <- notSynced]
 notSyncedOf other = Left (show other)
 
 -- | The transactions a sync handed to the store again, and that the store
 -- did not publish: each by its txid, as typed, with what the store said
 notPublishedOf :: Response -> Either String [(String, String)]
-notPublishedOf (ResponseSync results _ _ _) =
+notPublishedOf (ResponseSync results _ _ _ _) =
   Right [(Text.unpack (txHashToHex txid), why) | s <- results, (txid, why) <- syncResNotPublished s]
 notPublishedOf other = Left (show other)
 
 -- | The locks of the user a sync moved: each as the coin that is gone,
 -- then the coin that took its lock
 locksMovedOf :: Response -> Either String [(OutPoint, OutPoint)]
-locksMovedOf (ResponseSync results _ _ _) = Right (concatMap syncResLocksMoved results)
+locksMovedOf (ResponseSync results _ _ _ _) = Right (concatMap syncResLocksMoved results)
 locksMovedOf other = Left (show other)
 
 -- | What recover found of a seed: the index of its wallet, if it has one
@@ -798,7 +798,7 @@ labelsSetOf other = Left (show other)
 -- portfolio and its network
 placeOf :: Response -> Either String Place
 placeOf = \case
-  ResponseAddress ref _ _ _ _ _ -> Right (accountRefPlace ref)
+  ResponseAddress ref _ _ _ _ _ _ -> Right (accountRefPlace ref)
   ResponseDerivedAddr ref _ _ -> Right (accountRefPlace ref)
   ResponseTx place _ _ -> Right place
   ResponseSentPending place _ _ _ -> Right place
@@ -810,14 +810,14 @@ placeOf = \case
 -- network and its type
 accountRefOf :: Response -> Either String AccountRef
 accountRefOf = \case
-  ResponseAddress ref _ _ _ _ _ -> Right ref
+  ResponseAddress ref _ _ _ _ _ _ -> Right ref
   ResponseDerivedAddr ref _ _ -> Right ref
   other -> Left (show other)
 
 -- | The addresses of an answer, with their labels, the sections of a
 -- listing one after the other
 addressesOf :: Response -> Either String [(Text, Text)]
-addressesOf (ResponseAddress _ addr _ _ _ _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
+addressesOf (ResponseAddress _ addr _ _ _ _ _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
 addressesOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, dBAddressLabel addr) | g <- groups, (addr, _, _) <- groupRows g]
 addressesOf other = Left (show other)
 

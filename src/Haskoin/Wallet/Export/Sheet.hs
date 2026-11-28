@@ -247,7 +247,7 @@ listingSheet zoneAt = \case
   ResponseCoins groups -> Just (sheetOf (coinColumns zoneAt) (concatMap inPlace groups))
   ResponseTxs groups -> Just (sheetOf (txColumns zoneAt) (concatMap inPlace groups))
   ResponsePendingTxs _ held -> Just (sheetOf (pendingColumns zoneAt) held)
-  ResponseContacts groups -> Just (sheetOf (contactColumns zoneAt) [(net, contact) | (net, contacts) <- groups, contact <- contacts])
+  ResponseContacts groups -> Just (sheetOf (contactColumns zoneAt) [(net, contact) | (net, contacts) <- groups, (contact, _) <- contacts])
   _ -> Nothing
 
 -- | The sheet of the addresses of the transactions of an answer of txs or

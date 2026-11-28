@@ -125,6 +125,8 @@ Read a file before any work on what its line names.
 
 - `claude-notes/tags.md`: tags, the tags of a change address, a tag that
   locks its coins, a `--tag` filter on a report or an export.
+- `claude-notes/address-book.md`: a contact, `newcontact`, `contacts`,
+  `deletecontact`, a contact whose address a wallet holds.
 - `claude-notes/payments.md`: building a payment, a pending transaction, its
   change address and the coins it holds.
 - `claude-notes/transaction-view.md`: what `hw` prints for a transaction, on

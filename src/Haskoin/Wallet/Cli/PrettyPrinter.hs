@@ -215,8 +215,8 @@ responsePrinter choice view naming code shown layout answer =
     ResponseImport report active -> renderIO $ importDoc report active
     ResponseWalletFile file contents -> renderIO $ walletFileAnswerDoc file contents
     ResponseDatabaseFile file contents -> renderIO =<< databaseFileAnswerDoc file contents
-    ResponseAddress ref addr funds tags followedM activeM ->
-      renderIO =<< addressAnswerDoc naming code choice activeM ref addr funds tags followedM
+    ResponseAddress ref addr funds tags contactM followedM activeM ->
+      renderIO =<< addressAnswerDoc naming code choice activeM ref addr funds tags contactM followedM
     ResponseTags uses -> renderIO (tagUsesDoc uses)
     ResponseTagRenamed old use -> renderIO (tagRenamedDoc old use)
     ResponseTagMerged old use -> renderIO (tagMergedDoc old use)
@@ -266,9 +266,10 @@ responsePrinter choice view naming code shown layout answer =
           then styled Good ("The key of " <> cs addr <> " signed this message")
           else styled Failure ("This is not a signature of this message by the key of " <> cs addr)
     -- The networks left out last, where the user sees them
-    ResponseSync results notServed notSynced _ ->
+    ResponseSync results notServed notSynced held _ ->
       renderIO . vcat . intersperse mempty $
         [syncResultsPrinter naming choice results | not (null results)]
+          <> [heldContactsDoc naming held | not (null held)]
           <> [notServedDoc notServed | not (null notServed)]
           <> [failedNetworksDoc "not synced" notSynced | not (null notSynced)]
     ResponseRecover searched gap walletM created results elsewhere notServed notSearched activeM hintM usedOnHidden ->

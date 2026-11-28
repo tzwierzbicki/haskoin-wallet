@@ -39,6 +39,14 @@
 -- A transaction asks for the contacts among its addresses by their keys
 -- ('contactsAmong'), so showing a history costs one read of the primary
 -- key for each transaction, however large the address book.
+--
+-- = A contact the wallet holds
+--
+-- A wallet of the database may come to hold the address of a contact
+-- ("Haskoin.Wallet.Contacts"). Which contacts it holds is asked of the
+-- addresses each time ('contactHolders'), with one query for each
+-- account of the network, and never kept in the address book: the
+-- addresses of the wallet come and go without it.
 module Haskoin.Wallet.Database.Contact
   ( -- * Contacts
     contactText,
@@ -56,6 +64,12 @@ module Haskoin.Wallet.Database.Contact
     -- * Reading the address book
     networkContacts,
     contactsAmong,
+
+    -- * The contacts the wallet holds
+    contactHolders,
+    contactHolder,
+    listedContacts,
+    heldContacts,
 
     -- * For the shell
     contactsStarting,
@@ -83,7 +97,9 @@ import Database.Persist.Sql (Single (..), rawSql)
 import Haskoin
 import Haskoin.Wallet.Contacts
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Tag (TagFilter, ensureTag, keepsTagged, storedTag)
+import Haskoin.Wallet.Database.Address (addrPoolPath, heldRowsOnNetwork)
+import Haskoin.Wallet.Database.Portfolio (portfolioRef)
+import Haskoin.Wallet.Database.Tag (TagFilter, ensureTag, keepsTagged, noTagFilter, storedTag)
 import Haskoin.Wallet.Tags
 import Haskoin.Wallet.Util (addrToTextE, rowLimit)
 import Numeric.Natural (Natural)
@@ -255,6 +271,47 @@ contactsAmong net addrs
           ]
   where
     texts = Map.fromList [(address, addr) | addr <- addrs, Right address <- [contactText net addr]]
+
+{- The contacts the wallet holds -}
+
+-- | The address of the wallet that each of the contacts of a network is,
+-- for those a wallet of the database holds on that network, by the
+-- address of the contact as the address book keeps it. The same address
+-- on another network is another chain, where the wallet may not hold it:
+-- a contact of Bitcoin Cash at a legacy address the wallet has on Bitcoin
+-- is still an address of somebody else.
+contactHolders :: (MonadUnliftIO m) => Network -> [Contact] -> DB m (Map Text Holder)
+contactHolders net contacts = do
+  held <- heldRowsOnNetwork (const True) net (Map.keys kept)
+  return $
+    Map.fromList
+      [ (address, Holder (portfolioRef portfolio) path)
+        | (addr, (portfolio, row)) <- Map.toList held,
+          Just address <- [Map.lookup addr kept],
+          Just path <- [addrPoolPath net row]
+      ]
+  where
+    kept = Map.fromList [(addr, contactAddress contact) | contact <- contacts, Just addr <- [textToAddr net (contactAddress contact)]]
+
+-- | The address of the wallet that a contact of a network is, if a wallet
+-- of the database holds it
+contactHolder :: (MonadUnliftIO m) => Network -> Contact -> DB m (Maybe Holder)
+contactHolder net contact = Map.lookup (contactAddress contact) <$> contactHolders net [contact]
+
+-- | The contacts of a network as contacts lists them ('networkContacts'),
+-- each with the address of the wallet it is, if a wallet holds it
+listedContacts :: (MonadUnliftIO m) => Network -> TagFilter -> DB m [(Contact, Maybe Holder)]
+listedContacts net kept = do
+  contacts <- networkContacts net kept
+  holders <- contactHolders net contacts
+  return [(contact, Map.lookup (contactAddress contact) holders) | contact <- contacts]
+
+-- | The contacts of a network that a wallet of the database holds, each
+-- with the address of the wallet it is, in the order contacts lists them
+heldContacts :: (MonadUnliftIO m) => Network -> DB m [(Contact, Holder)]
+heldContacts net = do
+  listed <- listedContacts net noTagFilter
+  return [(contact, holder) | (contact, Just holder) <- listed]
 
 {- For the shell -}
 

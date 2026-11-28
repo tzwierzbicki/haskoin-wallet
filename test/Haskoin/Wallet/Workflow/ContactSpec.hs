@@ -15,6 +15,7 @@
 -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj.
 module Haskoin.Wallet.Workflow.ContactSpec (spec) where
 
+import Control.Monad (void)
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -23,8 +24,9 @@ import Data.Text.Encoding (decodeUtf8)
 import Data.Time (UTCTime)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
-import Haskoin.Wallet.Contacts (Contact (..))
-import Haskoin.Wallet.Database.Portfolio (Place (..))
+import Haskoin.Wallet.Contacts (Contact (..), Holder (..))
+import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
+import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..))
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
@@ -43,6 +45,7 @@ spec = do
   changeSpec
   deleteSpec
   listingSpec
+  heldSpec
   transactionSpec
   completionSpec
   walletFileSpec
@@ -74,12 +77,12 @@ contactOf = \case
 -- | The contacts contacts lists: the network of each group, with the
 -- label of each of its contacts, in their order
 listedOf :: Response -> Either String [(String, [Text])]
-listedOf (ResponseContacts groups) = Right [(net.name, contactLabel <$> contacts) | (net, contacts) <- groups]
+listedOf (ResponseContacts groups) = Right [(net.name, contactLabel . fst <$> contacts) | (net, contacts) <- groups]
 listedOf other = Left (show other)
 
 -- | When each contact contacts lists was added, by its label
 addedOf :: Response -> Either String [(Text, UTCTime)]
-addedOf (ResponseContacts groups) = Right [(contactLabel contact, contactCreated contact) | (_, contacts) <- groups, contact <- contacts]
+addedOf (ResponseContacts groups) = Right [(contactLabel contact, contactCreated contact) | (_, contacts) <- groups, (contact, _) <- contacts]
 addedOf other = Left (show other)
 
 -- | The contacts of the transactions of an answer: the label of each
@@ -451,6 +454,156 @@ listingSpec =
           `shouldBe` [ "There are no contacts to display",
                        "To add an address of somebody else to the address book, run: hw newcontact ADDRESS LABEL"
                      ]
+
+{- A contact the wallet holds -}
+
+-- | A home whose wallet came to hold the address of a contact. The user
+-- added the first receiving address of the test wallet,
+-- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, as the contact Savings, tagged
+-- friends, before this computer generated it: hw could not know it for
+-- an address of the wallet. receive then gave it out, at bip44/0/0 of
+-- portfolio0.
+holdingContact :: FilePath -> IO ()
+holdingContact home = do
+  newTestPortfolio home
+  _ <- answer home ["newcontact", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Savings", "--tag", "friends"] []
+  void $ answer home ["receive"] []
+
+-- | The contacts contacts lists, each by its label, with the address of
+-- the wallet it is, if a wallet holds its address
+holdersOf :: Response -> Either String [(Text, Maybe Holder)]
+holdersOf (ResponseContacts groups) = Right [(contactLabel contact, holderM) | (_, contacts) <- groups, (contact, holderM) <- contacts]
+holdersOf other = Left (show other)
+
+-- | The contacts sync lists as held by the wallet: the network of each
+-- group, with the label of each contact and its address of the wallet
+syncHeldOf :: Response -> Either String [(String, [(Text, Holder)])]
+syncHeldOf (ResponseSync _ _ _ held _) = Right [(net.name, [(contactLabel contact, holder) | (contact, holder) <- contacts]) | (net, contacts) <- held]
+syncHeldOf other = Left (show other)
+
+heldSpec :: Spec
+heldSpec =
+  describe "A contact whose address the wallet came to hold" $ do
+    it "is still listed by contacts, with a third line that names the address of the wallet it is and says to delete it" $
+      withHome $ \home -> do
+        holdingContact home
+        shown <- Text.lines . runOut <$> hw home ["contacts", "--network", "btc"] []
+        shown
+          `shouldBe` [ "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Savings\"  [friends]",
+                       "  1KEn 7jEX a7KC LeZy 59dk a5qR JBLn PMmr Lj",
+                       "  now bip44/0/0 of portfolio0: delete the contact"
+                     ]
+
+    -- The second test mnemonic makes wallet1
+    it "is listed with the wallet of that address in a database of several wallets" $
+      withHome $ \home -> do
+        holdingContact home
+        newPortfolioOf home testMnemonic2
+        shown <- Text.lines . runOut <$> hw home ["contacts", "--network", "btc"] []
+        drop 2 shown `shouldBe` ["  now bip44/0/0 of portfolio0 of wallet0: delete the contact"]
+
+    it "comes with its address of the wallet in the answer of contacts, and a contact of somebody else without one" $
+      withHome $ \home -> do
+        holdingContact home
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        (holdersOf <$> hwJson home ["contacts"] [])
+          `shouldReturn` Right [("Landlord", Nothing), ("Savings", Just (Holder (PortfolioRef 0 0) (PoolPath Bip44 (Deriv :/ 0 :/ 0))))]
+
+    -- The wallet holds the address on btc. On bch it has other keys, so
+    -- the same address there is of somebody else.
+    it "is not marked when it is on another network than the one the wallet holds the address on" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["newcontact", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Savings", "--network", "bch"] []
+        _ <- answer home ["receive"] []
+        (holdersOf <$> hwJson home ["contacts"] []) `shouldReturn` Right [("Savings", Nothing)]
+
+    it "is named in the answer of receive that gives its address out, with its label and its tags" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["newcontact", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Savings", "--tag", "friends"] []
+        shown <- Text.lines . runOut <$> hw home ["receive"] []
+        take 1 (reverse shown) `shouldBe` ["  Address book: also a contact, \"Savings\" [friends]: delete the contact"]
+
+    -- show takes the address for that of the wallet, and names the
+    -- contact in its last field
+    it "is named in the answer of show for its address, which shows the address of the wallet" $
+      withHome $ \home -> do
+        holdingContact home
+        shown <- Text.lines . runOut <$> hw home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
+        (take 1 shown, take 1 (reverse shown))
+          `shouldBe` ( ["bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"],
+                       ["  Address book: also a contact, \"Savings\" [friends]: delete the contact"]
+                     )
+
+    -- The address of the wallet has no tag: friends is on the contact
+    it "is named in the refusal of untag for a tag that it has and that the address of the wallet lacks" $
+      withHome $ \home -> do
+        holdingContact home
+        (errorOf <$> hwJson home ["untag", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "friends"] [])
+          `shouldReturn` Right "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj does not have the tag friends. The contact of the address book at this address has the tag friends, but the wallet holds the address now, and untag works on the address of the wallet. To delete the contact, run: hw deletecontact 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+
+    it "is not named in the refusal of untag for a tag that it does not have either" $
+      withHome $ \home -> do
+        holdingContact home
+        (errorOf <$> hwJson home ["untag", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "kyc"] [])
+          `shouldReturn` Right "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj does not have the tag kyc"
+
+    it "is deleted by deletecontact, whose question says where the wallet holds its address" $
+      withHome $ \home -> do
+        holdingContact home
+        run <- hw home ["deletecontact", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] ["y"]
+        Text.lines (runErr run)
+          `shouldBe` [ "The contact 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj \"Savings\" will be deleted from",
+                       "the address book.",
+                       "Its tags come off it, and the tags themselves stay.",
+                       "The wallet holds its address, at bip44/0/0 of portfolio0 of wallet0: the",
+                       "transactions show it by that path already.",
+                       "Delete the contact? [y/N] "
+                     ]
+        (listedOf <$> hwJson home ["contacts"] []) `shouldReturn` Right []
+
+    it "is listed at the end of sync, with its address of the wallet" $
+      withChain paidChain $ \home _ -> do
+        holdingContact home
+        (syncHeldOf <$> hwJson home ["sync"] [])
+          `shouldReturn` Right [("btc", [("Savings", Holder (PortfolioRef 0 0) (PoolPath Bip44 (Deriv :/ 0 :/ 0)))])]
+
+    -- The first sync found the payment. The second has nothing new, and
+    -- names the contact again: it is still in the address book.
+    it "is named by each sync until it is deleted, after the syncs, with a sentence on its tags" $
+      withChain paidChain $ \home _ -> do
+        holdingContact home
+        _ <- answer home ["sync"] []
+        shown <- Text.lines . runOut <$> hw home ["sync"] []
+        take 5 (dropWhile (/= "The wallet now holds the address of a contact of the address book:") shown)
+          `shouldBe` [ "The wallet now holds the address of a contact of the address book:",
+                       "  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Savings\"  [friends]",
+                       "    now bip44/0/0 of portfolio0: delete the contact",
+                       "Its tags still count in tags, and in txs --address-tag and txs --untagged, until",
+                       "you delete the contact."
+                     ]
+
+    it "is no longer named by sync once it is deleted" $
+      withChain paidChain $ \home _ -> do
+        holdingContact home
+        _ <- answer home ["deletecontact", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--yes"] []
+        (syncHeldOf <$> hwJson home ["sync"] []) `shouldReturn` Right []
+
+    -- The contact is on btc
+    it "is named by a sync of its network alone, with --network" $
+      withChain paidChain $ \home _ -> do
+        holdingContact home
+        (syncHeldOf <$> hwJson home ["sync", "--network", "bch"] []) `shouldReturn` Right []
+        (syncHeldOf <$> hwJson home ["sync", "--network", "btc"] [])
+          `shouldReturn` Right [("btc", [("Savings", Holder (PortfolioRef 0 0) (PoolPath Bip44 (Deriv :/ 0 :/ 0)))])]
+
+    -- The landlord is nobody's address in this database
+    it "is the only kind of contact that sync names: a contact of somebody else is not" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        (syncHeldOf <$> hwJson home ["sync"] []) `shouldReturn` Right []
 
 transactionSpec :: Spec
 transactionSpec =

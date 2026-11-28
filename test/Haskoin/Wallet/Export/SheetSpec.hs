@@ -826,15 +826,15 @@ contactSheetSpec =
         `shouldBe` Just ["Network", "Address", "Address in fours", "Contact label", "Contact tags", "Created (UTC)", "Created (local)", "Created (offset)"]
 
     it "gives a contact a row: its network, its address in one piece and in fours, its label, its tags in one cell, and when it was added" $
-      sheetRows <$> cetSheet (ResponseContacts [(btc, [alice])])
+      sheetRows <$> cetSheet (ResponseContacts [(btc, [(alice, Nothing)])])
         `shouldBe` Just [[TextCell "btc", TextCell "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", TextCell "bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4", TextCell "Alice", TextCell "cold kyc"] <> seenTimeCells]
 
     it "leaves the label and the tags of a contact without them empty" $
-      (cellsUnder ["Network", "Contact label", "Contact tags"] <$> cetSheet (ResponseContacts [(bch, [unnamed])]))
+      (cellsUnder ["Network", "Contact label", "Contact tags"] <$> cetSheet (ResponseContacts [(bch, [(unnamed, Nothing)])]))
         `shouldBe` Just [[TextCell "bch", EmptyCell, EmptyCell]]
 
     it "gives the contacts of each network one network after the other" $
-      (cellsUnder ["Network", "Address"] <$> cetSheet (ResponseContacts [(btc, [alice]), (bch, [unnamed])]))
+      (cellsUnder ["Network", "Address"] <$> cetSheet (ResponseContacts [(btc, [(alice, Nothing)]), (bch, [(unnamed, Nothing)])]))
         `shouldBe` Just
           [ [TextCell "btc", TextCell "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"],
             [TextCell "bch", TextCell "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"]

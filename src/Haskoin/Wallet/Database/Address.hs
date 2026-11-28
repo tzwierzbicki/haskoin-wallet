@@ -743,6 +743,30 @@ heldOnNetwork net addrs = do
   let holderOf = Map.fromList (concat holders)
   return [(addr, pool) | addr <- nub addrs, Just pool <- [Map.lookup addr holderOf]]
 
+-- | The addresses among those given that the wallet holds on the network,
+-- each with the portfolio that holds it and its row there, in the
+-- portfolios the first argument keeps. An address is of one portfolio at
+-- most on a network, since a key is in the database once on a network.
+--
+-- The database knows an address of a portfolio once the portfolio gave it
+-- out or a sync found it. An address further down a chain has no row, so
+-- it is not found. An offline computer that gives out no address finds
+-- none.
+--
+-- Each account kept on the network is asked for the addresses, with one
+-- query for each account, so a caller that knows which portfolios cannot
+-- hold them leaves those out.
+heldRowsOnNetwork :: (MonadUnliftIO m) => (Portfolio -> Bool) -> Network -> [Address] -> DB m (Map Address (Portfolio, DBAddress))
+heldRowsOnNetwork keeps net addrs
+  | null addrs = return Map.empty
+  | otherwise = do
+      accounts <- getAccounts
+      found <- forM [(portfolio, (accId, acc)) | (portfolio, accId, acc) <- accounts, keeps portfolio, accountNetwork acc == net] $
+        \(portfolio, account) -> do
+          rows <- storedAmong addrs account
+          return [(addr, (portfolio, row)) | row <- rows, Just addr <- [textToAddr net (dBAddressAddress row)]]
+      return $ Map.fromList (concat found)
+
 -- | The addresses of the account among the given ones. The account reads
 -- them on its network, and compares the addresses themselves, not their
 -- text: a Bitcoin Cash address is found written without its prefix, or in

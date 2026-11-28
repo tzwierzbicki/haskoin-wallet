@@ -76,7 +76,7 @@ import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Address (addrPoolPath, chainIndex, isInternal, labelledAddresses, poolAddressRow, storedAmong)
+import Haskoin.Wallet.Database.Address (addrPoolPath, chainIndex, heldRowsOnNetwork, isInternal, labelledAddresses, poolAddressRow)
 import Haskoin.Wallet.Database.Contact (contactsAmong, networkContacts)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), PortfolioRef, getAllPortfolios, parsePortfolioRef, portfolioRef, portfolioRefPairs)
 import Haskoin.Wallet.Database.Tag (TxTagFilter (..), addressTagsAmong, noTagFilter, deleteTxAddresses, fewKeptTxids, isTxFiltered, poolTxTags, txKept, txTags, txsKeptAmong, writeTxAddresses, writeTxOtherAddresses)
@@ -2085,26 +2085,11 @@ fillElsewhere pool info = do
 -- no address here. Otherwise each account of the other portfolios on the
 -- network is asked for the addresses, with one query for each account.
 heldElsewhere :: (MonadUnliftIO m) => Pool -> [Address] -> DB m (Map Address HeldElsewhere)
-heldElsewhere pool addrs
-  | null addrs = return Map.empty
-  | otherwise = do
-      accounts <- getAccounts
-      let net = pool.poolNetwork
-          others =
-            [ (portfolio, (accId, acc))
-              | (portfolio, accId, acc) <- accounts,
-                portfolio.portfolioId /= pool.poolPortfolio,
-                accountNetwork acc == net
-            ]
-      found <- forM others $ \(portfolio, account) -> do
-        rows <- storedAmong addrs account
-        return
-          [ (addr, HeldElsewhere (portfolioRef portfolio) path (dBAddressLabel row))
-            | row <- rows,
-              Just addr <- [textToAddr net (dBAddressAddress row)],
-              Just path <- [addrPoolPath net row]
-          ]
-      return $ Map.fromList (concat found)
+heldElsewhere pool addrs =
+  Map.mapMaybe elsewhere <$> heldRowsOnNetwork ((/= pool.poolPortfolio) . (.portfolioId)) net addrs
+  where
+    net = pool.poolNetwork
+    elsewhere (portfolio, row) = (\path -> HeldElsewhere (portfolioRef portfolio) path (dBAddressLabel row)) <$> addrPoolPath net row
 
 -- | The transaction with its labels filled in as the database has them
 -- now: those of the portfolio's addresses, and those the coins it spends

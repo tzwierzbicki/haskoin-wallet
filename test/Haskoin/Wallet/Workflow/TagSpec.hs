@@ -61,7 +61,7 @@ spec = do
 
 -- | The addresses of an answer, each with its tags
 addressTagsOf :: Response -> Either String [(Text, [Text])]
-addressTagsOf (ResponseAddress _ addr _ tags _ _) = Right [(dBAddressAddress addr, namesOf tags)]
+addressTagsOf (ResponseAddress _ addr _ tags _ _ _) = Right [(dBAddressAddress addr, namesOf tags)]
 addressTagsOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, namesOf tags) | g <- groups, (addr, _, tags) <- groupRows g]
 addressTagsOf other = Left (show other)
 
@@ -79,7 +79,7 @@ changeUntaggedOf = changeFollowedOf RemoveTags
 -- with the tags it did not take, the hash of the payment that stopped
 -- them, and the address that payment also spends from
 changeStopsOf :: Response -> Either String [(Text, [Text], String, Maybe Text)]
-changeStopsOf (ResponseAddress _ _ _ _ followedM _) =
+changeStopsOf (ResponseAddress _ _ _ _ _ followedM _) =
   Right
     [ (dBAddressAddress addr, namesOf stop.changeStopTags, Text.unpack (txHashToHex stop.changeStopPayment), (\(source, _, _) -> dBAddressAddress source) <$> stop.changeStopSource)
       | Just followed <- [followedM],
@@ -88,7 +88,7 @@ changeStopsOf (ResponseAddress _ _ _ _ followedM _) =
 changeStopsOf other = Left (show other)
 
 changeFollowedOf :: Retag -> Response -> Either String [(Text, [Text])]
-changeFollowedOf retag (ResponseAddress _ _ _ _ followedM _) =
+changeFollowedOf retag (ResponseAddress _ _ _ _ _ followedM _) =
   Right [(dBAddressAddress addr, namesOf tags) | Just (ChangeFollowed did rows _) <- [followedM], did == retag, (addr, _, tags) <- rows]
 changeFollowedOf _ other = Left (show other)
 

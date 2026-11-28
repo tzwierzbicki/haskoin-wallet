@@ -28,7 +28,7 @@ import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, netwo
 import Haskoin.Wallet.WalletFile (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.Contacts (Contact (..))
+import Haskoin.Wallet.Contacts (Contact (..), Holder (..))
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, readTag, tagColors)
@@ -361,6 +361,10 @@ arbitraryContact net =
     <*> arbitraryShownTags
     <*> arbitraryUTCTime
 
+-- | An address of the wallet that a contact turned out to be
+arbitraryHolder :: Gen Holder
+arbitraryHolder = Holder <$> arbitraryPortfolioRef <*> arbitraryPoolPath
+
 -- | Addresses of the network that are contacts of the address book
 arbitraryContacts :: Network -> Gen (Map.Map Address Contact)
 arbitraryContacts net = Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryAddress net <*> arbitraryContact net))
@@ -450,7 +454,7 @@ arbitraryResponse net =
       ResponsePortfolios <$> resize 5 (listOf arbitraryPortfolioView),
       -- The JSON of an answer about one thing leaves out the active
       -- portfolio, and reads back as naming none
-      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryAddressFunds <*> arbitraryShownTags <*> arbitraryMaybe (arbitraryChangeFollowed net) <*> pure Nothing,
+      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryAddressFunds <*> arbitraryShownTags <*> arbitraryMaybe (arbitraryContact net) <*> arbitraryMaybe (arbitraryChangeFollowed net) <*> pure Nothing,
       ResponseAddresses
         <$> resize 3 (listOf $ arbitraryGroup net ((,,) <$> arbitraryDBAddress net <*> arbitraryAddressFunds <*> arbitraryShownTags)),
       ResponseBalances
@@ -460,7 +464,7 @@ arbitraryResponse net =
       ResponseTagMerged <$> arbitraryTag <*> arbitraryTagUse,
       ResponseTagDeleted <$> arbitraryTag <*> (TagDeleted <$> arbitraryNatural <*> arbitraryNatural <*> arbitraryNatural),
       ResponseContact net <$> arbitraryContact net,
-      ResponseContacts <$> resize 3 (listOf ((,) net <$> resize 5 (listOf (arbitraryContact net)))),
+      ResponseContacts <$> resize 3 (listOf ((,) net <$> resize 5 (listOf ((,) <$> arbitraryContact net <*> arbitraryMaybe arbitraryHolder)))),
       ResponseContactDeleted net <$> arbitraryContact net,
       ResponseDerivedAddr
         <$> arbitraryAccountRef net
@@ -501,6 +505,7 @@ arbitraryResponse net =
         <$> (resize 10 $ listOf $ arbitrarySyncRes net)
         <*> (resize 3 $ listOf arbitraryNetwork)
         <*> (resize 3 $ listOf arbitraryFailedNetwork)
+        <*> resize 2 (listOf ((,) net <$> resize 3 (listOf ((,) <$> arbitraryContact net <*> arbitraryHolder))))
         <*> arbitraryMaybe arbitraryPortfolioRef,
       ResponseRecover
         <$> (resize 2 $ listOf arbitraryNetwork)

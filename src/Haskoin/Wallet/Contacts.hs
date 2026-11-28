@@ -31,6 +31,23 @@
 -- label and tags of its own already, and the views name it by them. The
 -- commands refuse to add one ("Haskoin.Wallet.Commands").
 --
+-- A wallet may come to hold the address of a contact later. importwallet
+-- or recover adds the wallet that owns it. Or the user added an address
+-- of their own that this computer had not generated yet, which hw cannot
+-- know, and receive or a sync reaches it. The address is then the
+-- wallet's everywhere: the views name it by its path, and label, tag,
+-- untag and show work on the address of the wallet. The contact stays in
+-- the address book, where nothing shows it any more. hw does not delete
+-- it: its label and its tags are what the user typed. It says so
+-- instead, with the address of the wallet the contact is now (the type
+-- t'Holder'), wherever the user meets the contact or the address:
+-- contacts marks it, the answer of an address of the wallet names its
+-- contact, and sync lists such contacts until they are deleted.
+--
+-- Whether a wallet holds the address is looked up each time, and never
+-- stored: a wallet deleted later makes the contact an address of
+-- somebody else again.
+--
 -- = The address in fours
 --
 -- A contact shows its address twice. Once as it is, in one piece, so
@@ -45,6 +62,7 @@
 -- ("Haskoin.Wallet.Database.Contact").
 module Haskoin.Wallet.Contacts
   ( Contact (..),
+    Holder (..),
     contactOrder,
     inFours,
   )
@@ -54,6 +72,8 @@ import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.!=), (.:), 
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (UTCTime)
+import Haskoin.Wallet.Database.Portfolio (PortfolioRef, parsePortfolioRef, portfolioRefPairs)
+import Haskoin.Wallet.Keys (PoolPath (..))
 import Haskoin.Wallet.Tags (ShownTag)
 
 -- | A contact as an answer shows it: an address of the address book,
@@ -84,6 +104,29 @@ instance ToJSON Contact where
 instance FromJSON Contact where
   parseJSON = withObject "Contact" $ \o ->
     Contact <$> o .: "address" <*> o .:? "label" .!= "" <*> o .:? "tags" .!= [] <*> o .: "created"
+
+-- | The address of a wallet of the database that the address of a
+-- contact is: the portfolio that holds it, and its path there, as in
+-- bip84\/0\/3 of portfolio1. The network is that of the contact: the
+-- same text on another network is another address, which the wallet may
+-- not hold.
+data Holder = Holder
+  { holderPortfolio :: !PortfolioRef,
+    holderPath :: !PoolPath
+  }
+  deriving (Eq, Show)
+
+-- | In JSON, the keys of the portfolio, then the type and the path of
+-- the address, as those of an address of the wallet
+instance ToJSON Holder where
+  toJSON holder =
+    object $
+      portfolioRefPairs (holderPortfolio holder)
+        <> ["type" .= pathKind (holderPath holder), "path" .= pathInAccount (holderPath holder)]
+
+instance FromJSON Holder where
+  parseJSON = withObject "address of the wallet" $ \o ->
+    Holder <$> parsePortfolioRef o <*> (PoolPath <$> o .: "type" <*> o .: "path")
 
 -- | What the contacts of a network are listed by: the label first, in
 -- the order of the alphabet, capital and small letters alike, then the

@@ -1737,6 +1737,54 @@ alone, since their recipient has no amount: it takes what remains.
 | `contacts --csv`, [`exportsheet`](#hw-exportsheet) | Write the address book to a spreadsheet |
 | [`exportjournal`](#hw-exportjournal) | Names the entry of a payment after the contact it pays, and writes the label of the contact below the amount it was paid. Files that payment under the account you gave a tag of the contact. Files a payment received under the account of a tag of the contact it came from |
 
+**A contact that becomes your own address.** A wallet of the database may come
+to hold the address of a contact. [`importwallet`](#hw-importwallet) or
+[`recover`](#hw-recover) may add the wallet that owns it. Or you added an
+address of your own wallet that this computer had not generated yet, and
+`receive` or `sync` reached it later. From then on, the address is the
+wallet's. The views show it by its path, in blue, and `label`, `tag`, `untag`
+and `show` work on the address of the wallet. The contact stays in the address
+book: its label and its tags are yours, so `hw` does not delete it. `hw` tells
+you instead, in three places. [`contacts`](#hw-contacts) marks the contact with
+the path that holds its address:
+
+```console
+$ hw contacts --network btc
+1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Savings"  [friends]
+  1KEn 7jEX a7KC LeZy 59dk a5qR JBLn PMmr Lj
+  now bip44/0/0 of portfolio0: delete the contact
+```
+
+[`sync`](#hw-sync) ends with such contacts, each time, until you delete them:
+
+```console
+$ hw sync
+...
+The wallet now holds the address of a contact of the address book:
+  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Savings"  [friends]
+    now bip44/0/0 of portfolio0: delete the contact
+Its tags still count in tags, and in txs --address-tag and txs --untagged, until
+you delete the contact.
+```
+
+And the answer of `receive`, `show`, `label` and `tag` for that address ends
+with a field that names the contact:
+
+```console
+$ hw show 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj
+  ...
+  Account     : portfolio0  btc  bip44
+  Address book: also a contact, "Savings" [friends]: delete the contact
+```
+
+Delete the contact with [`deletecontact`](#hw-deletecontact), the one command
+that still takes its address for the contact. Until then its tags still
+count: [`tags`](#hw-tags) counts the contact, and `txs --address-tag` and
+`txs --untagged` look at its tags, although no view of a transaction names it.
+To keep its label or its tags, put them on the address of the wallet first,
+with `label` and `tag`.
+
 The address book is in the database. `hw` copies it with the labels after each
 command that changes it, as [Automatic backups](#automatic-backups) says.
 
@@ -1754,10 +1802,6 @@ command that changes it, as [Automatic backups](#automatic-backups) says.
 >   underline the addresses of the address book of that computer. Copy the
 >   address book there with `exportwallet` and `importwallet`, or check the
 >   address itself.
-> - **An address the wallet holds is shown as the wallet's.** A wallet of the
->   database may come to hold the address of a contact, as when
->   `importwallet` adds that wallet. The views then show the address by its
->   path, in blue. The contact stays in the address book until you delete it.
 > - **`--address-tag` looks at the addresses a transaction shows.** A
 >   payment received shows the addresses it was paid from, and not what its
 >   payer paid to others in the same transaction. So a payout that pays you
@@ -4418,6 +4462,12 @@ and is gone when `sync` ends, so scripts never see it.
 >   transaction as sent again only once the server lists it, and waits up to
 >   ten seconds for that. A `sync` with a transaction that the network
 >   refuses in silence takes that much longer.
+> - **`sync` names the contacts that are your own addresses.** When a wallet
+>   of the database holds the address of a contact of the
+>   [address book](#the-address-book), `sync` ends with that contact and the
+>   path of its address, each time, until you delete the contact. Its tags
+>   still count in `tags` and in the tag filters of `txs` until then.
+>   `sync --network` names those of that network only.
 > - **`sync` shows no next step when it found nothing new.** The steps after
 >   a `sync` are there for what it found: new transactions, a conflict, or a
 >   transaction that was not sent again.
@@ -4450,7 +4500,10 @@ hw receive --type bip84
 ```
 
 The answer ends with the account of the address: its portfolio, its network
-and its type.
+and its type. When the address is in the [address book](#the-address-book),
+one more field follows, `Address book`: you added an address of the wallet as
+a contact before this computer generated it, and the field says to delete the
+contact.
 
 ```console
 $ hw receive --label "Wages"
@@ -4558,6 +4611,10 @@ prints a new one, with its QR code on a terminal. Its
 line, each between brackets. Use it to give an address out again: `show`
 gives out no new address. The address can be in any portfolio. Its `Account`
 field says so when it is not in the active one.
+
+When the address is also in the [address book](#the-address-book), the answer
+ends with the field `Address book`, which names its contact and says to delete
+it: a wallet came to hold the address of a contact.
 
 When no wallet of the database holds the address, `show` looks for it in the
 [address book](#the-address-book). It prints the contact as
@@ -7786,8 +7843,10 @@ hw untag TXID rent tax                      # take two tags off a transaction
 `untag` answers with the address or the transaction as it is now, as `tag`
 does. `untag` refuses a tag that the address or the transaction does not
 have, and changes nothing. You most likely mistyped the tag, or named the
-wrong address. When it refuses one of several tags, it takes none of them
-off:
+wrong address. The tag may also be on a contact whose address the wallet came
+to hold: the refusal then says so, and names the command that deletes the
+contact ([The address book](#the-address-book)). When it refuses one of
+several tags, it takes none of them off:
 
 ```console
 $ hw untag bip84/0/0 cold
@@ -8123,7 +8182,9 @@ hw show ADDRESS
 >   `sync` found it used. So `newcontact` accepts an address that the
 >   portfolio would give out later, as if it were an address of somebody else.
 >   Once the portfolio gives the address out, the views show it as the
->   wallet's. Delete the contact then.
+>   wallet's, and `hw` tells you to delete the contact: `receive` says so when
+>   it gives the address out, and so do `contacts` and `sync`. See
+>   [The address book](#the-address-book).
 
 #### `hw contacts`
 
@@ -8135,7 +8196,10 @@ sorted by address. `--reverse` reverses the order in each section.
 
 Each contact takes two lines: its address in one piece, with its label and its
 [tags](#tags-on-addresses-and-transactions), then its address in groups of
-four characters.
+four characters. A contact whose address a wallet of the database came to hold
+has a third line, such as `now bip44/0/0 of portfolio0: delete the contact`:
+see [The address book](#the-address-book). `--verbose` gives it as the field
+`Now`, and the table after the label.
 
 ```console
 $ hw contacts
@@ -8241,7 +8305,10 @@ To add an address of somebody else to the address book, run: hw newcontact ADDRE
 > - **`--json` gives the contacts in groups, one for each network.** Each
 >   contact has its `address`, its `label`, its `tags`, each with its `name`
 >   and its `color`, and `created`, when it was added. The address in fours is
->   not in the JSON, since a script compares the address itself.
+>   not in the JSON, since a script compares the address itself. A contact
+>   whose address a wallet of the database holds also has `ownaddress`: the
+>   `wallet` and the `portfolio` that hold it, and its `type` and its `path`
+>   there.
 > - **A transaction gives its contacts in JSON too.** With `--json`, a
 >   transaction lists the addresses that are contacts under `contacts`, by
 >   address, each with its label and its tags. They stay among `otheroutputs`
@@ -8268,6 +8335,13 @@ Deleted from the address book
 Nothing else changes. The transactions that paid the address stay in the
 history. From then on, they show the address alone, as they show the address
 of a stranger. The tags themselves stay, on everything else that has them.
+
+For a contact whose address a wallet of the database came to hold, the
+question says where, as in `The wallet holds its address, at bip44/0/0 of
+portfolio0 of wallet0: the transactions show it by that path already.`
+Deleting such a contact changes no view of a transaction. See
+[The address book](#the-address-book).
+
 `deletecontact` refuses an address that the address book does not have:
 
 ```console

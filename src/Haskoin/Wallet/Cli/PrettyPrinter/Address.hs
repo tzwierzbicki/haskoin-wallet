@@ -35,12 +35,14 @@ import Haskoin.Wallet.Cli.PrettyPrinter.AddressWords (changeWord)
 import Haskoin.Wallet.Cli.PrettyPrinter.Balance (balanceFigures, heldAmountCell, notSyncedWords, totalFigure, unspendableFigure, waitingAmount, waitingAmountCell)
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountPrinter, block, columns, commaList, counted, countPrinter, field, labelWord, secondText, sentence, styled, tagMarks, text, wordsOf)
 import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine (commandWord)
+import Haskoin.Wallet.Cli.PrettyPrinter.Contact (alsoContactField)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (PathNaming (..), SeenFrom (..), accountRefField, ownPathsAlone, ownSuffix, pathsSeenFrom)
 import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), addressWidth, amountColumn, column, tableLine, tagsCell, tagsColumn)
 import Haskoin.Wallet.Cli.QrCode (paymentUri, qrRows)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Config.View (View (..))
+import Haskoin.Wallet.Contacts (Contact)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address (AddressFunds (..), CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, coinBalanceUnspendable, pathText)
@@ -184,11 +186,17 @@ verboseAddressDoc paths net unit pad created addr funds tags =
 -- active portfolio, at another address. Each portfolio is named with its
 -- wallet or not, as given.
 --
+-- An address that is also in the address book ends its fields with one
+-- that names its contact and says to delete it
+-- ('Haskoin.Wallet.Cli.PrettyPrinter.Contact.alsoContactField'): a
+-- wallet came to hold the address of a contact, and the views show the
+-- address as the wallet's from then on.
+--
 -- With --with-change, tag and untag end the answer with the change
 -- addresses that followed the address, after an empty line
 -- (@changeFollowedDoc@).
-addressAnswerDoc :: WalletNaming -> AddressCode -> UnitChoice -> Maybe PortfolioRef -> AccountRef -> DBAddress -> AddressFunds -> [ShownTag] -> Maybe ChangeFollowed -> IO (Doc Style)
-addressAnswerDoc naming code choice activeM ref addr funds tags followedM = do
+addressAnswerDoc :: WalletNaming -> AddressCode -> UnitChoice -> Maybe PortfolioRef -> AccountRef -> DBAddress -> AddressFunds -> [ShownTag] -> Maybe Contact -> Maybe ChangeFollowed -> IO (Doc Style)
+addressAnswerDoc naming code choice activeM ref addr funds tags contactM followedM = do
   created <- utcToLocalZonedTime (dBAddressCreated addr)
   let net = accountRefNetwork ref
       unit = unitOn net choice
@@ -199,7 +207,8 @@ addressAnswerDoc naming code choice activeM ref addr funds tags followedM = do
   let rows
         | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri net (dBAddressAddress addr)))
         | otherwise = []
-      answered = withCodeDoc (vcat [details, indent 2 (accountRefField naming 12 activeM ref)]) rows
+      fields = accountRefField naming 12 activeM ref : [alsoContactField 12 contact | Just contact <- [contactM]]
+      answered = withCodeDoc (vcat (details : (indent 2 <$> fields))) rows
   return (vcat (answered : concat [[mempty, changeFollowedDoc paths net unit followed] | Just followed <- [followedM]]))
 
 -- | The change addresses that followed the address tag or untag was

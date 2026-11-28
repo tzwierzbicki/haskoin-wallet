@@ -33,13 +33,13 @@ spec = do
   -- network, as the public one serves no regtest, is no failure.
   describe "An answer hw exits with a failure for" $ do
     it "is a sync that left out a network whose store is down" $
-      responseFailed (ResponseSync [quietSync] [] [(bch, downStore)] (Just mainPortfolioRef)) `shouldBe` True
+      responseFailed (ResponseSync [quietSync] [] [(bch, downStore)] [] (Just mainPortfolioRef)) `shouldBe` True
 
     it "is not a sync that left out a network the host does not serve" $
-      responseFailed (ResponseSync [quietSync] [btcTest4] [] (Just mainPortfolioRef)) `shouldBe` False
+      responseFailed (ResponseSync [quietSync] [btcTest4] [] [] (Just mainPortfolioRef)) `shouldBe` False
 
     it "is not a sync of every network" $
-      responseFailed (ResponseSync [quietSync] [] [] (Just mainPortfolioRef)) `shouldBe` False
+      responseFailed (ResponseSync [quietSync] [] [] [] (Just mainPortfolioRef)) `shouldBe` False
 
     -- The transaction is sent: a failure would tell a script that it is
     -- not

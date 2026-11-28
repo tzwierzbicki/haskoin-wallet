@@ -13,7 +13,7 @@ module Haskoin.Wallet.Commands.Sync
   )
 where
 
-import Control.Monad (when)
+import Control.Monad (forM, when)
 import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -24,9 +24,12 @@ import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Run (runDBResponse)
 import Haskoin.Wallet.Config
+import Haskoin.Wallet.Contacts (Contact, Holder)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
+import Haskoin.Wallet.Database.Contact (heldContacts)
 import Haskoin.Wallet.Database.Portfolio
+import Haskoin.Wallet.Keys (portfolioNetworks)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Sync.Status (StatusLine (..), withStatusLine)
@@ -97,13 +100,35 @@ cmdSync cfg netM mode =
       synced <- syncPools cfg storeOn chosen mode (terminalWatcher line)
       -- The steps after the sync work in the active portfolio
       activeM <- activePortfolioRef
+      held <- lift $ shownHeldContacts cfg netM
       -- The answer keeps to the networks hw shows
       return $
         ResponseSync
           (shownSyncs cfg (syncedPools synced))
           (onShownNetworks cfg id (syncedNotServed synced))
           [(net, cs failure) | (net, failure) <- onShownNetworks cfg fst (syncedDown synced)]
+          held
           activeM
+
+-- | The contacts of the address book that a wallet of the database holds
+-- the address of, on the networks hw shows, or on the --network of the
+-- sync alone, by network, each with that address of the wallet
+-- ("Haskoin.Wallet.Contacts"). sync ends with
+-- them. It is the command that makes most addresses the wallet's, in a
+-- wallet that importwallet or recover just added, and the one a user runs
+-- every day, so it is where they learn that a contact is their own
+-- address now.
+--
+-- They are those the wallet holds once the sync is done, and not those
+-- this sync found. So sync names such a contact each time, until the
+-- user deletes it: as long as it is in the address book, its tags count
+-- in tags and in the filters of txs, where no view shows it. A sync that
+-- told it once would also miss the contact whose address receive gave
+-- out, or importwallet made from a labelled record.
+shownHeldContacts :: Config -> Maybe Network -> DB IO [(Network, [(Contact, Holder)])]
+shownHeldContacts cfg netM =
+  fmap (filter (not . null . snd)) . forM [net | net <- portfolioNetworks, isShown cfg net, maybe True (== net) netM] $ \net ->
+    (,) net <$> heldContacts net
 
 -- | The syncs an answer gives, among those sync or recover did: those of
 -- the networks hw shows. The syncs of the hidden networks were done all

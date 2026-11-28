@@ -238,13 +238,30 @@ retagNamed cfg retag word typedTags withChange target = do
             pool <- accountPool <$> getAccountById accId
             Just <$> retagChangeChain retag pool row tags
           else return Nothing
+      onContact <- tagsOfContactAt accId row missing
       let lacked = "The address " <> cs (dBAddressAddress row) <> " does not have " <> tagsNamed missing
       case (missing, (.chainChanged) <$> followedM) of
         ([], _) -> return ()
-        (_, Nothing) -> throwError lacked
-        (_, Just []) -> throwError (lacked <> ", and no change address down the chain of its payments has " <> oneOrMore missing "it" "them")
+        (_, Nothing) -> throwError (lacked <> onContact)
+        (_, Just []) -> throwError (lacked <> ", and no change address down the chain of its payments has " <> oneOrMore missing "it" "them" <> onContact)
         (_, Just _) -> liftIO $ tell terminal (lacked <> ": " <> oneOrMore missing "it" "they" <> " came off the change addresses alone")
       retaggedAnswer retag followedM accId row
+    -- What the refusal of untag adds for an address of the wallet that
+    -- is also in the address book, when its contact has tags the address
+    -- lacks: the user saw them in contacts, and untag denies them. A
+    -- wallet came to hold the address of the contact, so the command
+    -- works on the address of the wallet ('namedAddress'), and only
+    -- deletecontact still reaches the contact.
+    tagsOfContactAt accId row missing = do
+      net <- accountNetwork <$> getAccountById accId
+      contactM <- lift $ contactAt net (dBAddressAddress row)
+      return $ case [tag | Just contact <- [contactM], tag <- shownTag <$> contactTags contact, tag `elem` missing] of
+        [] -> ""
+        had ->
+          ". The contact of the address book at this address has "
+            <> tagsNamed had
+            <> ", but the wallet holds the address now, and untag works on the address of the wallet. To delete the contact, run: hw deletecontact "
+            <> cs (dBAddressAddress row)
     -- A word for the tags a sentence named before
     oneOrMore :: [Tag] -> String -> String -> String
     oneOrMore named one several = if length named == 1 then one else several

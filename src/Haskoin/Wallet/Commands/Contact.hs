@@ -25,10 +25,11 @@ module Haskoin.Wallet.Commands.Contact
   )
 where
 
-import Control.Monad (filterM, forM, forM_)
+import Control.Monad (forM, forM_)
 import Control.Monad.Except (ExceptT (..), throwError)
 import Control.Monad.Trans.Class (lift)
 import Data.List (genericTake, intercalate, nub)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -41,7 +42,6 @@ import Haskoin.Wallet.Commands.Run (runDBResponse)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Contact
 import Haskoin.Wallet.Database.Portfolio
@@ -172,14 +172,18 @@ contactAnswer net address = do
 -- by them. Two labels for one address would disagree sooner or later.
 -- The check looks on the network of the contact alone: the same address
 -- on another network is another chain, where the wallet may not hold it.
+--
+-- An address of the wallet that this computer has not generated yet is
+-- taken: hw cannot know it (@notGeneratedOrKept@). Once the wallet holds
+-- it, contacts, sync and the answer of the address say so
+-- ("Haskoin.Wallet.Contacts").
 cmdNewContact :: Config -> NewContact -> IO Response
 cmdNewContact cfg opts =
   runDBResponse cfg $ do
     (net, addr) <- liftEither $ contactNetwork cfg opts.network opts.address
     address <- liftEither $ contactText net addr
-    own <- lift $ findAddressByText opts.address
-    onNet <- filterM (\(_, accId, _) -> (== net) . accountNetwork <$> getAccountById accId) own
-    forM_ (listToMaybe onNet) $ \(portfolio, _, row) ->
+    held <- lift $ heldRowsOnNetwork (const True) net [addr]
+    forM_ (Map.elems held) $ \(portfolio, row) ->
       throwError $
         cs address
           <> " is an address of the wallet: "
@@ -229,11 +233,17 @@ readingNetworks typed = [(net, addr) | net <- portfolioNetworks, Just addr <- [t
 -- label ('confirmDeletion', 'deleteContactNotice'). The command deletes
 -- no funds and no key, and the copy of the labels hw keeps after each
 -- change holds the address book as it was before (@backUpLabels@).
+--
+-- A contact whose address a wallet of the database holds is found here
+-- too, and nowhere else: label, tag, untag and show take its address for
+-- that of the wallet ('namedAddress'). The question then says where the
+-- wallet holds the address.
 cmdDeleteContact :: Config -> Text -> Maybe Network -> Bool -> IO Response
 cmdDeleteContact cfg typed netM yes =
   runDBResponse cfg $ do
     (contact, net) <- contactNamed (notInBook typed) cfg netM typed
-    confirmDeletion yes (deleteContactNotice contact) "Delete the contact?"
+    holderM <- lift $ contactHolder net contact
+    confirmDeletion yes (deleteContactNotice contact holderM) "Delete the contact?"
     lift $ deleteContact net (contactAddress contact)
     return (ResponseContactDeleted net contact)
 
@@ -252,6 +262,10 @@ notInBook typed = "The address book has no contact " <> cs typed <> ". hw contac
 -- comes with all of its tags, kept or not. A word that is no tag is
 -- refused, as in the other listings.
 --
+-- A contact whose address a wallet of the database holds comes with that
+-- address of the wallet ('listedContacts'), so that the listing marks it:
+-- the contact is still there, and nothing else shows it any more.
+--
 -- An address book is typed by hand and holds few rows, so each section
 -- is read whole, and its table sizes its columns to all of its contacts
 -- ("Haskoin.Wallet.Database.Contact").
@@ -263,7 +277,7 @@ contactsListing cfg netM kept paging = do
   _ <- requireTags kept.keptTags
   let listed = [net | net <- portfolioNetworks, isShown cfg net, maybe True (== net) netM]
       rowsOf net = do
-        contacts <- lift $ networkContacts net kept
+        contacts <- lift $ listedContacts net kept
         return $ case listedOrder paging of
           UsualOrder -> contacts
           ReverseOrder -> reverse contacts
@@ -274,9 +288,9 @@ contactsListing cfg netM kept paging = do
               contacts <- rowsOf net
               let following = case afterM of
                     Nothing -> contacts
-                    Just cursor -> drop 1 $ dropWhile ((/= cursor) . contactAddress) contacts
+                    Just cursor -> drop 1 $ dropWhile ((/= cursor) . contactAddress . fst) contacts
               return $ maybe id genericTake countM following,
-            listingCursor = Right . contactAddress,
+            listingCursor = Right . contactAddress . fst,
             listingAnswer = \contacts -> ResponseContacts [(net, contacts) | not (null contacts)],
             listingWhole = True,
             listingShownEmpty = False
@@ -287,7 +301,7 @@ contactsListing cfg netM kept paging = do
       held <- forM listed $ \net -> do
         contacts <- rowsOf net
         let named = [address | Just addr <- [textToAddr net typed], Right address <- [contactText net addr]]
-        return (net, listToMaybe [contactAddress contact | contact <- contacts, contactAddress contact `elem` named])
+        return (net, listToMaybe [contactAddress contact | (contact, _) <- contacts, contactAddress contact `elem` named])
       found <- liftEither $ sectionOfAddress typed held
       case found of
         Just (i, address) -> return (drop i listed, Just address)

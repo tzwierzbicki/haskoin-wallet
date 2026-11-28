@@ -127,7 +127,7 @@ nextStepsPrinter cmd res =
                    first : _ <- [importCreated report]
                ]
     -- A sync that synced nothing has nothing new to see
-    (CommandSync {}, ResponseSync results _ _ activeM)
+    (CommandSync {}, ResponseSync results _ _ _ activeM)
       | not (null results) ->
           case troubleSteps results of
             [] -> stepsPrinter (txsSteps activeM (nub [placePortfolio (syncResPlace result) | result <- results, syncResTxUpdates result > 0]))

@@ -55,6 +55,7 @@ import Control.Applicative ((<|>))
 import Control.Monad (forM)
 import Data.Aeson
 import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (Pair, Parser)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -65,7 +66,7 @@ import Haskoin.Wallet.Database.Account (PortfolioView)
 import Haskoin.Wallet.Database.Address (AddressFunds, CoinBalance (..), addressWithCoinBalance, addressWithFunds, parseAddressWithCoinBalance, parseAddressWithFunds)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.Database.File (DatabaseShown, databaseShownPairs, parseDatabaseShown)
-import Haskoin.Wallet.Contacts (Contact)
+import Haskoin.Wallet.Contacts (Contact, Holder)
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse)
 import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (..), PortfolioRef (..), accountRefNetwork, parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
@@ -365,10 +366,12 @@ data Response
   | -- | An address of an account, with what hw knows of its funds: the
     -- totals of its coins, what they are worth and what it can spend
     -- now, or that its pool was never synced (the type t'AddressFunds').
-    -- Then its tags, and the active portfolio, which may be another one. The
-    -- answer of tag and of untag with --with-change also gives the change
-    -- addresses that followed the address.
-    ResponseAddress !AccountRef !DBAddress !AddressFunds ![ShownTag] !(Maybe ChangeFollowed) !(Maybe PortfolioRef)
+    -- Then its tags, the contact of the address book at this address,
+    -- if there is one ("Haskoin.Wallet.Contacts"), and the active
+    -- portfolio, which may be another one. The answer of tag and of untag
+    -- with --with-change also gives the change addresses that followed the
+    -- address.
+    ResponseAddress !AccountRef !DBAddress !AddressFunds ![ShownTag] !(Maybe Contact) !(Maybe ChangeFollowed) !(Maybe PortfolioRef)
   | -- | Addresses, grouped by account, each with what hw knows of its
     -- funds (the type t'AddressFunds') and its tags
     ResponseAddresses ![Group (DBAddress, AddressFunds, [ShownTag])]
@@ -452,12 +455,15 @@ data Response
     ResponseVerifyMsg !Text !Text !Text !Bool
   | -- | The sync of each portfolio on each network synced, the networks
     -- the host does not serve, the networks not synced, each with the
-    -- failure of its store, and the active portfolio, if the database has
-    -- one. A sync covers every portfolio. txs, a step after it, lists the
+    -- failure of its store, the contacts of the address book that a
+    -- wallet of the database holds the address of, by network, each with
+    -- that address of the wallet ("Haskoin.Wallet.Contacts"), and the
+    -- active portfolio, if the database has one. A sync covers every
+    -- portfolio. txs, a step after it, lists the
     -- active portfolio alone, so new transactions in another portfolio
     -- need a switch first. pendingtxs lists every portfolio, so a pending
     -- transaction in conflict needs none.
-    ResponseSync ![SyncRes] ![Network] ![(Network, Text)] !(Maybe PortfolioRef)
+    ResponseSync ![SyncRes] ![Network] ![(Network, Text)] ![(Network, [(Contact, Holder)])] !(Maybe PortfolioRef)
   | -- | What recover found of a seed. In order: the networks searched;
     -- the gap of portfolios the search ended on; the wallet of the seed,
     -- if it has one now; the indexes of the portfolios created; the sync
@@ -494,8 +500,9 @@ data Response
     -- of the address book
     ResponseContact !Network !Contact
   | -- | The contacts of the address book, grouped by network, in the
-    -- order contacts lists them
-    ResponseContacts ![(Network, [Contact])]
+    -- order contacts lists them, each with the address of the wallet it
+    -- is, when a wallet of the database came to hold its address
+    ResponseContacts ![(Network, [(Contact, Maybe Holder)])]
   | -- | A contact deleted from the address book, as it was
     ResponseContactDeleted !Network !Contact
   deriving (Eq, Show)
@@ -633,9 +640,10 @@ instance ToJSON Response where
     ResponseWalletFile file shown -> typed "walletfile" (("file" .= file) : fileShownPairs shown)
     ResponseDatabaseFile file shown -> typed "databasefile" (("file" .= file) : databaseShownPairs shown)
     ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
-    ResponseAddress ref addr funds tags followedM _ ->
+    ResponseAddress ref addr funds tags contactM followedM _ ->
       typed "address" $
         ["account" .= ref, "address" .= addressWithFunds (accountRefNetwork ref) addr funds tags]
+          <> ["contact" .= contact | Just contact <- [contactM]]
           <> maybe [] (changeFollowedPairs (accountRefNetwork ref)) followedM
     ResponseAddresses groups ->
       typed
@@ -685,12 +693,13 @@ instance ToJSON Response where
       typed "signmsg" ["message" .= message, "signature" .= signature, "address" .= addr]
     ResponseVerifyMsg message signature addr valid ->
       typed "verifymsg" ["message" .= message, "signature" .= signature, "address" .= addr, "valid" .= valid]
-    ResponseSync results notServed notSynced activeM ->
+    ResponseSync results notServed notSynced held activeM ->
       typed
         "sync"
         [ "syncres" .= (syncResJson <$> results),
           "notserved" .= ((.name) <$> notServed),
           "notsynced" .= (failedNetworkJson <$> notSynced),
+          "contactsheld" .= [contactGroupJson (net, [(contact, Just holder) | (contact, holder) <- contacts]) | (net, contacts) <- held],
           "activeportfolio" .= activeM
         ]
     ResponseRecover searched gap walletM created results elsewhere notServed notSearched active hintM usedOnHidden ->
@@ -716,8 +725,7 @@ instance ToJSON Response where
     ResponseTagDeleted tag had ->
       typed "tagdeleted" ["tag" .= tag, "addresses" .= had.deletedFromAddresses, "txs" .= had.deletedFromTxs, "contacts" .= had.deletedFromContacts]
     ResponseContact net contact -> typed "contact" ["network" .= net.name, "contact" .= contact]
-    ResponseContacts groups ->
-      typed "contacts" ["groups" .= [object ["network" .= net.name, "contacts" .= contacts] | (net, contacts) <- groups]]
+    ResponseContacts groups -> typed "contacts" ["groups" .= (contactGroupJson <$> groups)]
     ResponseContactDeleted net contact -> typed "contactdeleted" ["network" .= net.name, "contact" .= contact]
 
 instance FromJSON Response where
@@ -743,8 +751,9 @@ instance FromJSON Response where
       "address" -> do
         ref <- o .: "account"
         (addr, funds, tags) <- parseAddressWithFunds =<< o .: "address"
+        contactM <- o .:? "contact"
         followedM <- parseChangeFollowed o
-        return (ResponseAddress ref addr funds tags followedM activeLeftOut)
+        return (ResponseAddress ref addr funds tags contactM followedM activeLeftOut)
       "addresses" -> ResponseAddresses <$> (mapM (withObject "group" (parseGroup (\_ g -> mapM parseAddressWithFunds =<< g .: "addresses"))) =<< o .: "groups")
       "balances" -> ResponseBalances <$> (mapM balanceGroup =<< o .: "groups")
       "derivedaddr" -> ResponseDerivedAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "cutaddress"
@@ -791,6 +800,7 @@ instance FromJSON Response where
           <$> (mapM parseSyncRes =<< o .: "syncres")
           <*> (mapM networkNamed =<< o .: "notserved")
           <*> (mapM parseFailedNetwork =<< o .: "notsynced")
+          <*> (mapM heldGroup =<< o .:? "contactsheld" .!= [])
           <*> o .:? "activeportfolio"
       "recover" ->
         ResponseRecover
@@ -811,7 +821,7 @@ instance FromJSON Response where
       "tagmerged" -> ResponseTagMerged <$> o .: "from" <*> o .: "tag"
       "tagdeleted" -> ResponseTagDeleted <$> o .: "tag" <*> (TagDeleted <$> o .: "addresses" <*> o .: "txs" <*> o .: "contacts")
       "contact" -> ResponseContact <$> network o <*> o .: "contact"
-      "contacts" -> ResponseContacts <$> (mapM contactGroup =<< o .: "groups")
+      "contacts" -> ResponseContacts <$> (mapM parseContactGroup =<< o .: "groups")
       "contactdeleted" -> ResponseContactDeleted <$> network o <*> o .: "contact"
       _ -> fail "Invalid JSON response type"
     where
@@ -819,6 +829,11 @@ instance FromJSON Response where
       -- portfolio: see the module header
       activeLeftOut = Nothing
       network o = networkNamed =<< o .: "network"
+      -- The contacts of a network that the wallet holds: each has the
+      -- address of the wallet it is
+      heldGroup entry = do
+        (net, contacts) <- parseContactGroup entry
+        (,) net <$> mapM (\(contact, holderM) -> maybe (fail "A contact without the address of the wallet") (return . (,) contact) holderM) contacts
       keyValue :: (FromJSON v) => Value -> Parser (Text, v)
       keyValue = withObject "setting" $ \entry -> (,) <$> entry .: "key" <*> entry .: "value"
       -- A transaction with where it is, which names its network
@@ -828,12 +843,27 @@ instance FromJSON Response where
       -- A group of a listing whose rows are read on its network
       marshalled :: (MarshalJSON Network row) => Data.Aeson.Key -> Value -> Parser (Group row)
       marshalled key = withObject "group of a listing" (parseGroup (\net g -> mapM (unmarshalValue net) =<< g .: key))
-      contactGroup = withObject "contacts of a network" $ \entry ->
-        (,) <$> network entry <*> entry .: "contacts"
       balanceGroup = withObject "balances of a network" $ \entry ->
         (,)
           <$> parseGroup (\_ g -> mapM parseAddressWithCoinBalance =<< g .: "addresses") entry
           <*> (parseCoinBalance =<< entry .: "total")
+
+-- | The contacts of a network in the JSON of an answer: the name of the
+-- network, then each contact, with the address of the wallet it is under
+-- the key ownaddress, when a wallet of the database holds its address
+contactGroupJson :: (Network, [(Contact, Maybe Holder)]) -> Value
+contactGroupJson (net, contacts) = object ["network" .= net.name, "contacts" .= (listed <$> contacts)]
+  where
+    listed (contact, holderM) = case (toJSON contact, holderM) of
+      (Object fields, Just holder) -> Object (KeyMap.insert "ownaddress" (toJSON holder) fields)
+      (plain, _) -> plain
+
+-- | The contacts of a network back from 'contactGroupJson'
+parseContactGroup :: Value -> Parser (Network, [(Contact, Maybe Holder)])
+parseContactGroup = withObject "contacts of a network" $ \entry ->
+  (,) <$> (networkNamed =<< entry .: "network") <*> (mapM listed =<< entry .: "contacts")
+  where
+    listed = withObject "contact" $ \fields -> (,) <$> parseJSON (Object fields) <*> fields .:? "ownaddress"
 
 -- | The network of a name in JSON
 networkNamed :: String -> Parser Network
@@ -980,6 +1010,6 @@ responseFailed :: Response -> Bool
 responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
 responseFailed (ResponseChecked _ matched _ _) = not matched
-responseFailed (ResponseSync _ _ notSynced _) = not (null notSynced)
+responseFailed (ResponseSync _ _ notSynced _ _) = not (null notSynced)
 responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched _ _ _) = not (null notSearched)
 responseFailed _ = False
